@@ -18,16 +18,23 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	securejoin "github.com/cyphar/filepath-securejoin"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 	"tronbyt-server/internal/data"
 )
+
+// pushDebounce coalesces rapid state changes into a single render+push.
+// Key: "deviceID/iname" → *time.Timer
+var pushDebounce sync.Map
 
 // handleAppControllerUIRedirect canonicalises the path to include a trailing
 // slash so that relative URLs inside controller.html resolve correctly.
@@ -98,7 +105,22 @@ func (s *Server) handleAppControllerStateSet(w http.ResponseWriter, r *http.Requ
 		slog.Error("Failed to write state response", "error", err)
 	}
 
-	go s.pushAppUpdate(deviceID, iname)
+	s.schedulePushAppUpdate(deviceID, iname)
+}
+
+// schedulePushAppUpdate debounces render+push so rapid successive state saves
+// collapse into one render using the final state.
+func (s *Server) schedulePushAppUpdate(deviceID, iname string) {
+	const debounce = 300 * time.Millisecond
+	key := deviceID + "/" + iname
+	if existing, loaded := pushDebounce.LoadAndDelete(key); loaded {
+		existing.(*time.Timer).Stop()
+	}
+	timer := time.AfterFunc(debounce, func() {
+		pushDebounce.Delete(key)
+		s.pushAppUpdate(deviceID, iname)
+	})
+	pushDebounce.Store(key, timer)
 }
 
 // pushAppUpdate renders the app and broadcasts the result to the device so the
@@ -129,7 +151,15 @@ func (s *Server) pushAppUpdate(deviceID, iname string) {
 		return
 	}
 
-	imgBytes, _, err := s.RenderApp(ctx, device, &app, appPath, nil)
+	// Inject current state directly so the star file doesn't make an HTTP
+	// request (and hit the pixlet HTTP cache).  The star file checks for
+	// "_state" in config first and falls back to http.get when absent.
+	configOverrides := maps.Clone(map[string]any(app.Config))
+	if stateBytes, err := os.ReadFile(s.appStatePath(deviceID, iname)); err == nil {
+		configOverrides["_state"] = string(stateBytes)
+	}
+
+	imgBytes, _, err := s.RenderApp(ctx, device, &app, appPath, configOverrides)
 	if err != nil {
 		slog.Warn("pushAppUpdate: render failed", "device_id", deviceID, "iname", iname, "error", err)
 		return
