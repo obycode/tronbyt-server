@@ -273,6 +273,13 @@ func (s *Server) routes() {
 	s.SetupAPIRoutes()
 	s.SetupAuthRoutes()
 
+	// App controller — generic per-installation state store + UI hosting.
+	// No authentication; sufficient for LAN use.
+	s.Router.HandleFunc("GET /app-api/{device_id}/{iname}", s.handleAppControllerUIRedirect)
+	s.Router.HandleFunc("GET /app-api/{device_id}/{iname}/", s.handleAppControllerUI)
+	s.Router.HandleFunc("GET /app-api/{device_id}/{iname}/state", s.handleAppControllerStateGet)
+	s.Router.HandleFunc("POST /app-api/{device_id}/{iname}/state", s.handleAppControllerStateSet)
+
 	// Device endpoint
 	s.Router.Handle("GET /{id}/next", http.HandlerFunc(s.handleNextApp))
 

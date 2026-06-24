@@ -153,6 +153,14 @@ func (s *Server) handleAddAppPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pre-populate config for apps that ship a server component (controller.html).
+	// The server_url value is derived from the current request so it works behind
+	// reverse proxies that set X-Forwarded-Proto / X-Forwarded-Host.
+	appConfig := make(data.JSONMap)
+	if appHasServerComponent(s.DataDir, appPath) {
+		appConfig["server_url"] = baseURL(r) + "/app-api/" + device.ID + "/" + iname
+	}
+
 	newApp := data.App{
 		DeviceID:    device.ID,
 		Iname:       iname,
@@ -162,6 +170,7 @@ func (s *Server) handleAddAppPost(w http.ResponseWriter, r *http.Request) {
 		Notes:       notes,
 		Enabled:     true,
 		Path:        &appPath,
+		Config:      appConfig,
 	}
 
 	err = s.DB.Transaction(func(tx *gorm.DB) error {

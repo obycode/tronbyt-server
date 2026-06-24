@@ -28,6 +28,7 @@ type Manifest struct {
 	Tags                []string `yaml:"tags"`
 	Published           string   `yaml:"published"`
 	Updated             string   `yaml:"updated"`
+	ServerComponent     bool     `yaml:"serverComponent"`
 }
 
 type AppMetadata struct {
