@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	securejoin "github.com/cyphar/filepath-securejoin"
 	"gopkg.in/yaml.v3"
 	"gorm.io/gorm"
 	"tronbyt-server/internal/data"
@@ -96,6 +97,45 @@ func (s *Server) handleAppControllerStateSet(w http.ResponseWriter, r *http.Requ
 	if _, err := w.Write(body); err != nil {
 		slog.Error("Failed to write state response", "error", err)
 	}
+
+	go s.pushAppUpdate(deviceID, iname)
+}
+
+// pushAppUpdate renders the app and broadcasts the result to the device so the
+// display updates immediately without waiting for the next polling cycle.
+func (s *Server) pushAppUpdate(deviceID, iname string) {
+	ctx := context.Background()
+
+	app, err := gorm.G[data.App](s.DB).
+		Where("device_id = ? AND iname = ?", deviceID, iname).
+		First(ctx)
+	if err != nil {
+		slog.Warn("pushAppUpdate: app not found", "device_id", deviceID, "iname", iname, "error", err)
+		return
+	}
+	if app.Path == nil || *app.Path == "" {
+		return
+	}
+
+	device, err := s.reloadDevice(deviceID)
+	if err != nil {
+		slog.Warn("pushAppUpdate: device not found", "device_id", deviceID, "error", err)
+		return
+	}
+
+	appPath, err := securejoin.SecureJoin(s.DataDir, *app.Path)
+	if err != nil {
+		slog.Warn("pushAppUpdate: bad app path", "path", *app.Path, "error", err)
+		return
+	}
+
+	imgBytes, _, err := s.RenderApp(ctx, device, &app, appPath, nil)
+	if err != nil {
+		slog.Warn("pushAppUpdate: render failed", "device_id", deviceID, "iname", iname, "error", err)
+		return
+	}
+
+	s.Broadcaster.Notify(deviceID, imgBytes)
 }
 
 // appStatePath returns the file path for an installation's persisted state.
